@@ -22,9 +22,9 @@ public class ShowCodeInGame : NetworkBehaviour
         {
             if (codeDisplayPrefab != null)
             {
-                if (!string.IsNullOrEmpty(MainMenu.JoinCode))
+                if (!string.IsNullOrEmpty(UiMainMenu.JoinCode))
                 {
-                    codeDisplayPrefab.text = "Room Code: " + MainMenu.JoinCode;
+                    codeDisplayPrefab.text = "Room Code: " + UiMainMenu.JoinCode;
                 }
             }
             hostOnlyControls.SetActive(IsHost);
@@ -33,7 +33,7 @@ public class ShowCodeInGame : NetworkBehaviour
     }
     public void CopyJoinCode()
     {
-        string code = MainMenu.JoinCode;
+        string code = UiMainMenu.JoinCode;
         if (!string.IsNullOrEmpty(code))
         {
             GUIUtility.systemCopyBuffer = code;

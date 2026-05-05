@@ -7,7 +7,6 @@ TagManager:
   - Enemy
   - Ground
   - Destory
-  - SpawnPoint
   layers:
   - Default
   - TransparentFX

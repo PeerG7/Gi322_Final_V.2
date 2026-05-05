@@ -1,11 +1,13 @@
 ﻿using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class Entity : NetworkBehaviour
 {
-    public NetworkVariable<int> NetworkHp = new NetworkVariable<int>(100, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    [SerializeField] protected int MaxHp = 100;
+    [SerializeField] private GameObject winUI;
+    [SerializeField] private GameObject loseUI;
+    public NetworkVariable<int> Hp = new NetworkVariable<int>(100, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
     protected float Speed;
     protected int Def;
     protected int AtkPower;
@@ -13,17 +15,11 @@ public class Entity : NetworkBehaviour
     protected StopHelper helper;
     protected Vector3 currentVelocity;
     protected float SmoothTime;
+    public bool isDead = false;
+    public bool GameStart = false;
     protected virtual void Awake()
-    { 
-        rb = GetComponent<Rigidbody>();
-    }
-    public override void OnNetworkSpawn()
     {
-        // เมื่อตัวละครเกิด ให้เอาค่า Hp จาก Inspector ใส่ใน NetworkVariable (ทำเฉพาะที่ Server)
-        if (IsServer)
-        {
-            NetworkHp.Value = MaxHp;
-        }
+        rb = GetComponent<Rigidbody>();
     }
     protected virtual void Start() { }
     protected virtual void Update() { }
@@ -48,48 +44,34 @@ public class Entity : NetworkBehaviour
         helper.ResetAfter(1f);
     }
     protected virtual void Move() { }
-    public void TakeDamage(int damage)
+    [ServerRpc(RequireOwnership = false)]
+    public void TakeDamageServerRpc(int damage)
     {
-        if (!IsServer) return;
-
-        int finalDamage = damage - Def;
-        if (finalDamage < 0) finalDamage = 0;
-
-        // ลดเลือดที่ NetworkVariable
-        NetworkHp.Value -= finalDamage;
-
-        if (NetworkHp.Value <= 0)
+        if (GameStart)
         {
-            Die();
+            if (isDead) return; // ถ้าตายแล้ว ไม่ต้องทำข้างล่างซ้ำ
+
+            Hp.Value -= damage;
+
+            if (Hp.Value <= 0)
+            {
+                isDead = true; // ล็อคไว้ทันทีว่าคนนี้ตายแล้วนะ
+                Hp.Value = 0;
+
+                if (InGameController.Instance != null)
+                {
+                    InGameController.Instance.OnPlayerDie(OwnerClientId);
+                }
+            }
         }
+        
     }
     protected void Die()
     {
-        // 1. ต้องให้ Server เป็นคนตัดสินเท่านั้น เพื่อป้องกัน Client คำนวณพลาด
-        if (!IsServer) return;
-
-        // 2. เช็คว่า "เจ้าของ" ของตัวละครที่กำลังตายนี้คือใคร
-        // ถ้า OwnerClientId == 0 โดยปกติคือ Host
-        if (OwnerClientId == NetworkManager.Singleton.LocalClientId)
+        if (IsServer)
         {
-            // ถ้าคนตายคือคนที่มี ID เดียวกับ Server/Host
-            AnnounceWinnerClientRpc("Player 2 Wins!");
+            // ค้นหา InGameController ในฉากแล้วบอกว่าฉันตายแล้ว
+            FindObjectOfType<InGameController>().OnPlayerDie(OwnerClientId);
         }
-        else
-        {
-            // ถ้าคนตายไม่ใช่ Host (ก็คือ Client)
-            AnnounceWinnerClientRpc("Player 1 Wins!");
-        }
-
-        // 3. ลบตัวละครออกจากระบบ Network
-        GetComponent<NetworkObject>().Despawn();
-    }
-
-    [ClientRpc]
-    private void AnnounceWinnerClientRpc(string message)
-    {
-        // แสดงผลบนหน้าจอของทุกคน
-        Debug.Log(message);
-        // ตัวอย่าง: WinText.text = message;
     }
 }

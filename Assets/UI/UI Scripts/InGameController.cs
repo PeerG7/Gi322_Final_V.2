@@ -1,26 +1,47 @@
-using System.Runtime.CompilerServices;
+using System.Collections;
 using TMPro;
 using Unity.Netcode;
-using Unity.Netcode.Components;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 public class InGameController : NetworkBehaviour
 {
-    [Header("Spawn Points")]
-    public Transform spawnPointHost;   // ลากจุดวาง Host มาใส่
-    public Transform spawnPointClient; // ลากจุดวาง Client มาใส่
-    [Header("Host UI (Left)")]
-    public TextMeshProUGUI hpTextHost;
-    public TextMeshProUGUI cdTextHost;
+    public static InGameController Instance; // ทำ Singleton ให้เรียกง่าย
 
-    [Header("Client UI (Right)")]
-    public TextMeshProUGUI hpTextClient;
-    public TextMeshProUGUI cdTextClient;
-    // ฟังก์ชันสำหรับผูกกับปุ่ม OnClick
+    [Header("Spawn Points")]
+    public Transform spawnPointHost;
+    public Transform spawnPointClient;
+
+    [Header("UI Sliders")]
+    public Slider hpSliderHost;
+    public Slider cdSliderHost;
+    public Slider hpSliderClient;
+    public Slider cdSliderClient;
+
+    [Header("Round System")]
+    // ใช้ NetworkVariable เพื่อให้แต้มตรงกันทุกเครื่อง
+    public NetworkVariable<int> hostScore = new NetworkVariable<int>(0);
+    public NetworkVariable<int> clientScore = new NetworkVariable<int>(0);
+    public int maxWins = 2; // ชนะ 2 ใน 3
+    [Header("Score UI")]
+    public TextMeshProUGUI scoreText;
+    
+    private void Awake()
+    {
+        // --- 2. ต้องกำหนดค่าให้ Instance ตอนเริ่มเกม ---
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+    }
+
     void Update()
     {
-        // วนลูปหาผู้เล่นทุกคนที่ออนไลน์อยู่
+        if (!IsClient && !IsServer) return;
+        if (scoreText != null)
+        {
+            // ดึงค่า .Value จาก NetworkVariable มาแสดง
+            scoreText.text = $" {hostScore.Value} - {clientScore.Value}";
+        }
         foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
         {
             if (client.PlayerObject != null)
@@ -28,9 +49,8 @@ public class InGameController : NetworkBehaviour
                 Player playerScript = client.PlayerObject.GetComponent<Player>();
                 if (playerScript != null)
                 {
-                    // เช็คว่าเป็น Host (ID 0) หรือ Client (ID อื่นๆ)
                     bool isHost = client.ClientId == 0;
-                    UpdatePlayerDisplay(isHost, playerScript.NetworkHp.Value, playerScript.NetworkCD.Value);
+                    UpdatePlayerDisplay(isHost, playerScript.Hp.Value, playerScript.Cooldown.Value);
                 }
             }
         }
@@ -40,98 +60,142 @@ public class InGameController : NetworkBehaviour
     {
         if (isHost)
         {
-            if (hpTextHost) hpTextHost.text = "HP: " + hp;
-            if (cdTextHost) cdTextHost.text = "CD: " + cd.ToString("F1"); // ทศนิยม 1 ตำแหน่ง
+            if (hpSliderHost) hpSliderHost.value = hp;
+            if (cdSliderHost) cdSliderHost.value = cd;
         }
         else
         {
-            if (hpTextClient) hpTextClient.text = "HP: " + hp;
-            if (cdTextClient) cdTextClient.text = "CD: " + cd.ToString("F1");
+            if (hpSliderClient) hpSliderClient.value = hp;
+            if (cdSliderClient) cdSliderClient.value = cd;
         }
     }
-    public void TeleportPlayersButton()
+    public void BackToMenuButton()
     {
-        // เช็คความปลอดภัย: เฉพาะ Host เท่านั้นที่มีสิทธิ์กดปุ่มนี้แล้วเกิดผล
-        if (!IsHost) return;
-
-        // เรียกฟังก์ชันเพื่อย้ายตำแหน่งทุกคน
-        ExecuteTeleport();
+        if (IsServer) BackToMenuClientRpc();
+        else LeaveGame();
     }
-    private void ExecuteTeleport()
+    // ฟังก์ชันตัดสินเมื่อมีคนตาย (เรียกจาก Player.cs บน Server)
+    public void OnPlayerDie(ulong deadClientId)
     {
+        if (!IsServer) return;
+        if (NetworkManager.Singleton.ConnectedClients.TryGetValue(deadClientId, out var client))
+        {
+            var player = client.PlayerObject.GetComponent<Player>();
+            if (player != null)
+            {
+                player.HidePlayerClientRpc(); // สั่งให้หายไปทุกเครื่อง
+            }
+        }
+        if (deadClientId == 0)
+        {
+            clientScore.Value++;
+
+        }else 
+        {
+            hostScore.Value++;
+        } 
+
+        // เช็คว่ามีใครชนะครบ 2 หรือยัง
+        bool isHostMatchWinner = hostScore.Value >= maxWins;
+        bool isClientMatchWinner = clientScore.Value >= maxWins;
+
+        if (isHostMatchWinner || isClientMatchWinner)
+        {
+            // ถ้าชนะครบ 2/3 แล้ว ให้ไป Scene ผลแพ้ชนะเลย
+            GoToResultScenesClientRpc(isHostMatchWinner);
+        }
+        else
+        {
+            // ถ้ายังไม่ครบ ให้โชว์หน้าจอชนะรอบนั้น (isP1Winner คือ true ถ้า Host ได้แต้ม)
+            bool hostWonThisRound = (deadClientId != 0);
+            GameUIManager.Instance.ShowRoundWinnerClientRpc(hostWonThisRound);
+        }
+    }
+    [ClientRpc]
+    private void GoToResultScenesClientRpc(bool hostWinsMatch)
+    {
+        NetworkManager.Singleton.Shutdown();
+
+        if (IsHost)
+        {
+            SceneManager.LoadScene(hostWinsMatch ? "!WinScene" : "!LoseScene");
+        }
+        else
+        {
+            SceneManager.LoadScene(hostWinsMatch ? "!LoseScene" : "!WinScene");
+        }
+    }
+    [ServerRpc(RequireOwnership = false)]
+    public void RequestNextRoundServerRpc()
+    {
+        // 1. วาร์ปผู้เล่นกลับจุดเกิด
+        ExecuteTeleport();
+        // 2. รีเซ็ตเลือดทุกคน
+        foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
+        {
+            var p = client.PlayerObject.GetComponent<Player>();
+            if (p != null)
+            {
+                // เรียกฟังก์ชันรีเซ็ตที่เราสร้างไว้ใน Player.cs
+                p.ResetPlayerStatus();
+            }
+        }
+        // 3. สั่งทุกเครื่องปิดหน้าจอชนะรอบ แล้วกลับไปหน้า Gameplay
+        GameUIManager.Instance.ResetRoundUiClientRpc();
+    }
+    [ServerRpc(RequireOwnership = false)]
+    public void RequestStartServerRpc()
+    {
+
+        // 1. วาร์ปผู้เล่นกลับจุดเกิด
+        ExecuteTeleport();
+        
+        // 2. รีเซ็ตเลือดทุกคน
+        foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
+        {
+            var p = client.PlayerObject.GetComponent<Player>();
+            if (p != null)
+            {
+                // เรียกฟังก์ชันรีเซ็ตที่เราสร้างไว้ใน Player.cs
+                p.ResetPlayerStatus();
+                p.StartGame();
+            }
+        }
+        // 3. สั่งทุกเครื่องปิดหน้าจอชนะรอบ แล้วกลับไปหน้า Gameplay
+        GameUIManager.Instance.ResetRoundUiClientRpc();
+    }
+
+    // ฟังก์ชันวาร์ปที่มีอยู่แล้ว
+    public void ExecuteTeleport()
+    {
+        if (!IsServer) return;
         foreach (var client in NetworkManager.Singleton.ConnectedClientsList)
         {
             var playerObject = client.PlayerObject;
             if (playerObject != null)
             {
-                // กำหนดตำแหน่งเป้าหมายแยกตาม ID (Host=0, Client=อื่นๆ)
-                Vector3 targetPos = (client.ClientId == 0)
-                                    ? spawnPointHost.position
-                                    : spawnPointClient.position;
-
-                // ส่งคำสั่งวาร์ปไปยังเครื่องที่เป็นเจ้าของตัวละครนั้นๆ
+                Vector3 targetPos = (client.ClientId == 0) ? spawnPointHost.position : spawnPointClient.position;
                 MovePlayerClientRpc(playerObject.NetworkObjectId, targetPos);
             }
         }
-    }
-    // --- ฟังก์ชันผูกกับปุ่ม "สร้างห้องใหม่" ---
-    public void BackToMenuButton()
-    {
-        // 1. ถ้าคนกดเป็น Host ให้บอกทุกคนในห้องว่า "เลิกเล่นแล้วนะ"
-        if (IsServer)
-        {
-            BackToMenuClientRpc();
-        }
-        else
-        {
-            // 2. ถ้า Client กดเอง ให้ตัวเองหลุดคนเดียว
-            LeaveGame();
-        }
-    }
-
-    [ClientRpc]
-    private void BackToMenuClientRpc()
-    {
-        // คำสั่งนี้จะทำงานที่เครื่องทุกคน (รวมถึง Host ด้วย)
-        LeaveGame();
-    }
-
-    private void LeaveGame()
-    {
-        // ตัดการเชื่อมต่อจาก Network
-        if (NetworkManager.Singleton != null)
-        {
-            NetworkManager.Singleton.Shutdown();
-        }
-
-        // โหลดฉากเมนูหลัก (เปลี่ยนชื่อ "MainMenu" ให้ตรงกับชื่อ Scene ของคุณ)
-        SceneManager.LoadScene("MainMenu");
-
-        Debug.Log("Left the game session.");
     }
     [ClientRpc]
     private void MovePlayerClientRpc(ulong networkObjectId, Vector3 targetPosition)
     {
         if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var targetNetObj))
         {
-            // ปิดตัวขัดขวางฟิสิกส์ (CharacterController)
             var cc = targetNetObj.GetComponent<CharacterController>();
             if (cc != null) cc.enabled = false;
-
-            // ถ้ามี NetworkTransform ให้ใช้คำสั่ง Teleport ของมัน
-            var nt = targetNetObj.GetComponent<NetworkTransform>();
-            if (nt != null)
-            {
-                nt.Teleport(targetPosition, targetNetObj.transform.rotation, targetNetObj.transform.localScale);
-            }
-            else
-            {
-                // ถ้าไม่มีให้ย้ายตรงๆ
-                targetNetObj.transform.position = targetPosition;
-            }
-
-            // เปิด CharacterController กลับมา
+            targetNetObj.transform.position = targetPosition;
             if (cc != null) cc.enabled = true;
         }
+    }
+    [ClientRpc]
+    private void BackToMenuClientRpc() => LeaveGame();
+
+    private void LeaveGame()
+    {
+        NetworkManager.Singleton.Shutdown();
+        UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu_New"); // เปลี่ยนเป็นชื่อ Scene เมนูของคุณ
     }
 }

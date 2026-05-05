@@ -11,7 +11,10 @@ public class Tank : Player
     private float originalSpeed;
     protected override void Start()
     {
-        MaxHp = 100;
+        if (IsOwner)
+        {
+            Hp.Value = 100;
+        }
         Speed = 10f;
         Def = 1;
         AtkPower = 20;
@@ -21,10 +24,10 @@ public class Tank : Player
     }
     protected override void Class()
     {
-        if (Controls.Player.Jump.WasPressedThisFrame() && Time.time >= CanCast)
+        if (Controls.Player.Jump.WasPressedThisFrame() && Cooldown.Value >= CanCast)
         {
             ActivateDefBuff();
-            CanCast = Time.time + Cooldown;
+            ResetCooldownServerRpc();
         }
         if (isBuffActive && Time.time >= buffEndTime)
         {

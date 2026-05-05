@@ -6,7 +6,10 @@ public class Dash : Player
     private float dashForce = 10f;
     protected override void Start()
     {
-        MaxHp = 100;
+        if (IsOwner)
+        {
+            Hp.Value = 100;
+        }
         Speed = 10f;
         Def = 1;
         AtkPower = 20;
@@ -16,10 +19,10 @@ public class Dash : Player
     protected override void Class()
     {
         // เช็กปุ่ม Jump (หรือเปลี่ยนเป็นปุ่มอื่นใน Action Asset)
-        if (Controls.Player.Jump.WasPressedThisFrame() && Time.time >= CanCast)
+        if (Controls.Player.Jump.WasPressedThisFrame() && Cooldown.Value >= CanCast)
         {
             DoDash();
-            CanCast = Time.time + Cooldown; // ตั้งเวลา Cooldown
+            ResetCooldownServerRpc();
         }
     }
     private void DoDash()
